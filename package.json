@@ -1,0 +1,59 @@
+{
+  "name": "openfiles",
+  "version": "0.1.0",
+  "description": "Local semantic file search powered by AI embeddings",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder",
+    "postinstall": "electron-vite --version || true"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "chromadb": "^3.3.2",
+    "@chroma-core/google-gemini": "^0.1.0",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1",
+    "electron-store": "^8.2.0",
+    "zustand": "^5.0.3",
+    "lucide-react": "^0.474.0",
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config-ts": "^3.0.0",
+    "@types/node": "^22.10.7",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.0.0",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  },
+  "build": {
+    "appId": "com.openfiles.app",
+    "productName": "OpenFiles",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ]
+  }
+}
