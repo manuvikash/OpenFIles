@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
 import type { DirNode } from '@/types'
 import { getFileIconInfo } from '@/lib/fileParser'
+import { collectionNameFromDir } from '@/lib/indexer'
 
 // ─── Icon Mapping ─────────────────────────────────────────────────────────────
 
@@ -107,7 +108,8 @@ export function Sidebar() {
     setSelectedFile,
     setSelectedDirectory,
     setDirectoryTree,
-    setFiles
+    setFiles,
+    setCollectionName
   } = useAppStore()
 
   const handleSelectDirectory = useCallback(async () => {
@@ -115,13 +117,16 @@ export function Sidebar() {
     if (!dir) return
 
     setSelectedDirectory(dir)
+    // Scope the collection to this directory immediately so search never
+    // returns results from a previously-indexed different folder.
+    setCollectionName(collectionNameFromDir(dir))
     const [tree, scanned] = await Promise.all([
       window.api.getDirectoryTree(dir),
       window.api.scanDirectory(dir)
     ])
     setDirectoryTree(tree)
     setFiles(scanned)
-  }, [setSelectedDirectory, setDirectoryTree, setFiles])
+  }, [setSelectedDirectory, setCollectionName, setDirectoryTree, setFiles])
 
   const handleRefresh = useCallback(async () => {
     if (!selectedDirectory) return

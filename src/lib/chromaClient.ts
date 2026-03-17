@@ -33,7 +33,13 @@ export function getEmbeddingFunction(): GoogleGeminiEmbeddingFunction {
 export async function getOrCreateCollection(name: string): Promise<Collection> {
   const c = getClient()
   const ef = getEmbeddingFunction()
-  return c.getOrCreateCollection({ name, embeddingFunction: ef })
+  // cosine similarity is correct for semantic embeddings.
+  // L2 (default) clusters all distances tightly in high-dim space.
+  return c.getOrCreateCollection({
+    name,
+    embeddingFunction: ef,
+    metadata: { 'hnsw:space': 'cosine' }
+  })
 }
 
 export async function getCollection(name: string): Promise<Collection | null> {
@@ -68,14 +74,18 @@ export async function heartbeat(): Promise<boolean> {
   }
 }
 
-// ─── Multimodal embedding ─────────────────────────────────────────────────────
+// ─── Gemini embedding helpers ─────────────────────────────────────────────────
 
 /**
- * Generate an embedding vector for a binary media file by calling the
- * Gemini Embedding API directly with base64-encoded inlineData.
- * Supports images (JPEG/PNG), audio, and video (MP4/MOV).
+ * Low-level Gemini embedContent call.
+ * taskType distinguishes query vs document embedding spaces:
+ *   RETRIEVAL_DOCUMENT — used when indexing content
+ *   RETRIEVAL_QUERY    — used when embedding a search query (better recall)
  */
-export async function embedMultimodal(base64: string, mimeType: string): Promise<number[]> {
+async function geminiEmbed(
+  parts: unknown[],
+  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT'
+): Promise<number[]> {
   if (!geminiApiKey) throw new Error('Gemini API key not set. Open Settings and add your API key.')
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${embeddingModelName}:embedContent?key=${geminiApiKey}`
   const res = await fetch(url, {
@@ -83,7 +93,8 @@ export async function embedMultimodal(base64: string, mimeType: string): Promise
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: `models/${embeddingModelName}`,
-      content: { parts: [{ inlineData: { mimeType, data: base64 } }] }
+      taskType,
+      content: { parts }
     })
   })
   if (!res.ok) {
@@ -91,7 +102,26 @@ export async function embedMultimodal(base64: string, mimeType: string): Promise
     throw new Error(`Gemini embed failed (${res.status}): ${body}`)
   }
   const data = await res.json()
-  return data.embedding.values as number[]
+  const values = data.embedding?.values as number[] | undefined
+  if (!values?.length) throw new Error(`Gemini embed returned empty vector. Response: ${JSON.stringify(data)}`)
+  console.debug(`[embed] ${taskType} → ${values.length}-dim vector, first3: [${values.slice(0, 3).map(v => v.toFixed(4)).join(', ')}]`)
+  return values
+}
+
+/**
+ * Embed a search query text with RETRIEVAL_QUERY task type.
+ * This is the correct task type for queries — it maps into a different
+ * (asymmetric) embedding subspace than documents, significantly improving recall.
+ */
+export async function embedQuery(text: string): Promise<number[]> {
+  return geminiEmbed([{ text }], 'RETRIEVAL_QUERY')
+}
+
+/**
+ * Embed a binary media file (image/audio/video) for indexing.
+ */
+export async function embedMultimodal(base64: string, mimeType: string): Promise<number[]> {
+  return geminiEmbed([{ inlineData: { mimeType, data: base64 } }], 'RETRIEVAL_DOCUMENT')
 }
 
 // ─── Collection Helpers ───────────────────────────────────────────────────────
@@ -105,7 +135,6 @@ export interface AddDocumentsParams {
 
 export async function addDocuments(params: AddDocumentsParams): Promise<void> {
   const { collection, ids, documents, metadatas } = params
-  // ChromaDB has a limit of 5000 per batch — chunk if needed
   const BATCH = 100
   for (let i = 0; i < ids.length; i += BATCH) {
     await collection.add({
@@ -124,10 +153,6 @@ export interface AddWithEmbeddingsParams {
   metadatas: Record<string, string | number | boolean>[]
 }
 
-/**
- * Add pre-computed embedding vectors directly to ChromaDB.
- * Used for binary media files where we call the Gemini API ourselves.
- */
 export async function addDocumentsWithEmbeddings(params: AddWithEmbeddingsParams): Promise<void> {
   const { collection, ids, embeddings, documents, metadatas } = params
   await collection.add({ ids, embeddings, documents, metadatas })
@@ -147,17 +172,41 @@ export interface QueryResult {
   distance: number
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyQueryResponse = any
+
 export async function queryCollection(params: QueryParams): Promise<QueryResult[]> {
-  const { collection, queryTexts, nResults = 20, where } = params
-  const results = await collection.query({
-    queryTexts,
-    nResults,
-    ...(where ? { where } : {})
+  const { collection, queryTexts, nResults = 20 } = params
+  const results: AnyQueryResponse = await collection.query({ queryTexts, nResults })
+  return parseQueryResults(results)
+}
+
+/**
+ * Query using a pre-computed embedding — bypasses the collection's default
+ * embedding function so we can use RETRIEVAL_QUERY task type.
+ */
+export async function queryCollectionByVector(params: {
+  collection: Collection
+  queryEmbedding: number[]
+  nResults?: number
+}): Promise<QueryResult[]> {
+  const { collection, queryEmbedding, nResults = 20 } = params
+  console.debug(`[query] sending ${queryEmbedding.length}-dim vector to ChromaDB, nResults=${nResults}`)
+  const results: AnyQueryResponse = await collection.query({
+    queryEmbeddings: [queryEmbedding],
+    nResults
   })
+  const parsed = parseQueryResults(results)
+  console.debug(
+    `[query] ChromaDB returned ${parsed.length} results:`,
+    parsed.slice(0, 5).map(r => ({ file: r.metadata.fileName, dist: r.distance.toFixed(4) }))
+  )
+  return parsed
+}
 
+function parseQueryResults(results: AnyQueryResponse): QueryResult[] {
   const output: QueryResult[] = []
-  if (!results.ids?.[0]) return output
-
+  if (!results?.ids?.[0]) return output
   for (let i = 0; i < results.ids[0].length; i++) {
     output.push({
       id: results.ids[0][i],

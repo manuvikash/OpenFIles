@@ -73,6 +73,7 @@ export function Toolbar() {
     collectionName,
     settings,
     selectedFile,
+    selectedDirectory,
     setSearch,
     setSearchResults,
     clearSearch,
@@ -103,9 +104,9 @@ export function Toolbar() {
     try {
       let results
       if (search.mode === 'file' && selectedFile) {
-        results = await fileSimilaritySearch(selectedFile.path, collectionName!, settings)
+        results = await fileSimilaritySearch(selectedFile.path, collectionName!, settings, selectedDirectory ?? undefined)
       } else {
-        results = await semanticSearch(query, collectionName!, settings)
+        results = await semanticSearch(query, collectionName!, settings, selectedDirectory ?? undefined)
       }
       setSearchResults(results)
     } catch (err) {
@@ -113,7 +114,7 @@ export function Toolbar() {
       setActivePanel('results')
     }
   }, [canSearch, search.mode, localQuery, selectedFile, collectionName, settings,
-      setSearch, setSearchResults, setActivePanel])
+      selectedDirectory, setSearch, setSearchResults, setActivePanel])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()

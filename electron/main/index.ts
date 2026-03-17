@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, net, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { promises as fs, existsSync, readdirSync } from 'fs'
@@ -451,44 +451,43 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.openfiles')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
-  // Proxy all HTTP requests destined for the local ChromaDB server through the
-  // main process so CORS never applies.  The Rust-based ChromaDB binary doesn't
-  // send CORS headers AND returns non-2xx for OPTIONS preflight, so the renderer
-  // (browser context) can never reach it directly.  `protocol.handle('http')`
-  // intercepts every HTTP request; we forward ChromaDB traffic via `net.fetch`
-  // (main-process networking, no CORS) and add the required headers.  All other
-  // traffic (Vite dev server, external APIs) passes through unchanged.
-  protocol.handle('http', async (request) => {
-    const url = new URL(request.url)
-    const isChroma = url.hostname === 'localhost' && url.port === String(chromaPort)
+  // Inject CORS headers on ChromaDB responses so the renderer can reach it.
+  //
+  // Uses onHeadersReceived instead of protocol.handle because:
+  //   protocol.handle('http') requires bypassCustomProtocolHandlers:true to avoid
+  //   infinite recursion — but that option only exists in Electron ≥36.
+  //   On Electron 33 it is silently ignored, causing net.fetch to loop back
+  //   through our own handler → hang.
+  //
+  //   onHeadersReceived is non-invasive (never touches request bodies) and the
+  //   statusLine field lets us override an OPTIONS 404/405 from ChromaDB to 204,
+  //   satisfying Chrome's CORS preflight check.
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://localhost:*/*', 'http://127.0.0.1:*/*'] },
+    (details, callback) => {
+      const port = new URL(details.url).port
+      if (port !== String(chromaPort)) {
+        callback({})
+        return
+      }
 
-    if (!isChroma) {
-      return net.fetch(request, { bypassCustomProtocolHandlers: true })
+      const corsHeaders: Record<string, string[]> = {
+        'Access-Control-Allow-Origin':  ['*'],
+        'Access-Control-Allow-Headers': ['Content-Type, Authorization, X-Requested-With'],
+        'Access-Control-Allow-Methods': ['GET, POST, PUT, DELETE, OPTIONS'],
+        'Access-Control-Max-Age':       ['86400']
+      }
+
+      if (details.method === 'OPTIONS') {
+        callback({
+          responseHeaders: { ...details.responseHeaders, ...corsHeaders },
+          statusLine: 'HTTP/1.1 204 No Content'
+        })
+      } else {
+        callback({ responseHeaders: { ...details.responseHeaders, ...corsHeaders } })
+      }
     }
-
-    // Respond to CORS preflight directly — ChromaDB doesn't handle OPTIONS
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Max-Age': '86400'
-        }
-      })
-    }
-
-    // Forward the real request and add CORS headers to the response
-    const response = await net.fetch(request, { bypassCustomProtocolHandlers: true })
-    const headers = new Headers(response.headers)
-    headers.set('Access-Control-Allow-Origin', '*')
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers
-    })
-  })
+  )
 
   // Window controls
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())

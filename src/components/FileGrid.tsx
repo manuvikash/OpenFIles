@@ -30,12 +30,15 @@ function FileIcon({ ext, size = 'md' }: { ext: string; size?: 'sm' | 'md' | 'lg'
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
 function EmptyState() {
-  const { selectedDirectory, setSelectedDirectory, setDirectoryTree, setFiles } = useAppStore()
+  const { selectedDirectory, setSelectedDirectory, setDirectoryTree, setFiles, setCollectionName } = useAppStore()
 
   const handleOpen = async () => {
     const dir = await window.api.openDirectory()
     if (!dir) return
     setSelectedDirectory(dir)
+    // Scope the collection to this directory immediately so search never
+    // returns results from a previously-indexed different folder.
+    setCollectionName(collectionNameFromDir(dir))
     const [tree, scanned] = await Promise.all([
       window.api.getDirectoryTree(dir),
       window.api.scanDirectory(dir)
