@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FileText, File, Code, Braces, Database, Terminal,
   Table, ExternalLink, FolderOpen, FolderSearch,
   Loader2, CheckCircle, AlertCircle, Play,
-  Image, Video, Music
+  Image, Video, Music, LayoutList, LayoutGrid,
+  ChevronLeft, ChevronRight, X, ZoomIn
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
@@ -11,8 +12,18 @@ import type { FileInfo } from '@/types'
 import {
   getFileIconInfo, formatFileSize, formatRelativeTime, isSupportedExtension
 } from '@/lib/fileParser'
-import { indexFiles } from '@/lib/indexer'
-import { collectionNameFromDir } from '@/lib/indexer'
+import { indexFiles, collectionNameFromDir } from '@/lib/indexer'
+import { useImagePreview } from '@/hooks/useImagePreview'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png'])
+
+function isImageFile(ext: string): boolean {
+  return IMAGE_EXTENSIONS.has(ext.toLowerCase())
+}
+
+// ─── Icon Map ─────────────────────────────────────────────────────────────────
 
 const ICON_MAP: Record<string, React.ElementType> = {
   'file-text': FileText, 'code': Code, 'braces': Braces,
@@ -36,8 +47,6 @@ function EmptyState() {
     const dir = await window.api.openDirectory()
     if (!dir) return
     setSelectedDirectory(dir)
-    // Scope the collection to this directory immediately so search never
-    // returns results from a previously-indexed different folder.
     setCollectionName(collectionNameFromDir(dir))
     const [tree, scanned] = await Promise.all([
       window.api.getDirectoryTree(dir),
@@ -81,11 +90,8 @@ function IndexSection() {
   const [abortController, setAbortController] = useState<AbortController | null>(null)
 
   const supportedFiles = files.filter((f) => f.supported)
-
-  // Build a lookup of already-indexed files keyed by path
   const indexedMap = new Map(indexedFiles.map((f) => [f.path, f]))
 
-  // Incremental: only index files that are new or modified since last indexed
   const filesToIndex = supportedFiles.filter((f) => {
     const prev = indexedMap.get(f.path)
     return !prev || f.modified > prev.indexedAt
@@ -116,7 +122,7 @@ function IndexSection() {
           setIndexingProgress({ indexed, total, current, status: 'indexing' })
         },
         ac.signal,
-        collectionName ?? undefined  // reuse existing collection name
+        collectionName ?? undefined
       )
 
       setCollectionName(name)
@@ -159,7 +165,6 @@ function IndexSection() {
 
   if (supportedFiles.length === 0) return null
 
-  // Build idle status label
   const idleLabel = (() => {
     if (hasError) return `Error: ${indexingProgress.error}`
     if (isComplete) {
@@ -213,7 +218,6 @@ function IndexSection() {
           <span className="text-xs text-surface-400 flex-1">{idleLabel}</span>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* Force re-index all — shown when files are already up to date */}
             {allUpToDate && (
               <button
                 onClick={() => handleIndex(true)}
@@ -245,16 +249,141 @@ function IndexSection() {
   )
 }
 
-// ─── File Row ─────────────────────────────────────────────────────────────────
+// ─── Image Thumbnail ──────────────────────────────────────────────────────────
+
+function ImageThumb({ filePath, className }: { filePath: string; className?: string }) {
+  const { src, loading } = useImagePreview(filePath)
+  return (
+    <div className={clsx('bg-surface-900 overflow-hidden flex items-center justify-center', className)}>
+      {src ? (
+        <img src={src} alt="" className="w-full h-full object-cover" />
+      ) : loading ? (
+        <Loader2 className="w-3 h-3 text-surface-600 animate-spin" />
+      ) : (
+        <Image className="w-3.5 h-3.5 text-surface-600" />
+      )}
+    </div>
+  )
+}
+
+// ─── Lightbox ─────────────────────────────────────────────────────────────────
+
+interface LightboxProps {
+  files: FileInfo[]
+  index: number
+  onClose: () => void
+  onChange: (index: number) => void
+}
+
+function Lightbox({ files, index, onClose, onChange }: LightboxProps) {
+  const file = files[index]
+  const { src, loading } = useImagePreview(file?.path)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') onChange((index - 1 + files.length) % files.length)
+      if (e.key === 'ArrowRight') onChange((index + 1) % files.length)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [index, files.length, onClose, onChange])
+
+  if (!file) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex flex-col bg-surface-900 rounded-2xl overflow-hidden shadow-2xl max-w-5xl w-full mx-4"
+        style={{ maxHeight: '92vh' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-surface-800 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="text-xs text-surface-500 font-mono shrink-0">
+              {index + 1} / {files.length}
+            </span>
+            <span className="text-sm font-medium text-surface-100 truncate">{file.name}</span>
+            <span className="text-xs text-surface-600 shrink-0">{formatFileSize(file.size)}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button
+              onClick={() => window.api.openPath(file.path)}
+              title="Open in system viewer"
+              className="flex items-center gap-1.5 text-xs text-surface-500 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-surface-500 hover:text-surface-200 rounded-lg hover:bg-surface-800 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Image */}
+        <div className="flex-1 flex items-center justify-center bg-black/40 overflow-hidden" style={{ minHeight: 200 }}>
+          {loading && (
+            <Loader2 className="w-8 h-8 text-surface-500 animate-spin" />
+          )}
+          {src && (
+            <img
+              src={src}
+              alt={file.name}
+              className="max-w-full max-h-full object-contain"
+              style={{ maxHeight: 'calc(92vh - 120px)' }}
+            />
+          )}
+          {!loading && !src && (
+            <p className="text-surface-600 text-sm">Could not load image</p>
+          )}
+        </div>
+
+        {/* Footer nav */}
+        <div className="flex items-center justify-between px-4 py-2 border-t border-surface-800 shrink-0">
+          <p className="text-xs text-surface-600 truncate flex-1">
+            {file.path}
+          </p>
+          <div className="flex items-center gap-2 ml-4">
+            <button
+              onClick={() => onChange((index - 1 + files.length) % files.length)}
+              className="flex items-center gap-1 text-xs text-surface-400 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Prev
+            </button>
+            <button
+              onClick={() => onChange((index + 1) % files.length)}
+              className="flex items-center gap-1 text-xs text-surface-400 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── List Row ─────────────────────────────────────────────────────────────────
 
 interface FileRowProps {
   file: FileInfo
   isSelected: boolean
   isIndexed: boolean
   onClick: () => void
+  onPreview?: () => void
 }
 
-function FileRow({ file, isSelected, isIndexed, onClick }: FileRowProps) {
+function FileRow({ file, isSelected, isIndexed, onClick, onPreview }: FileRowProps) {
   const handleOpen = (e: React.MouseEvent) => {
     e.stopPropagation()
     window.api.openPath(file.path)
@@ -265,6 +394,8 @@ function FileRow({ file, isSelected, isIndexed, onClick }: FileRowProps) {
     window.api.showItemInFolder(file.path)
   }
 
+  const isImg = isImageFile(file.ext)
+
   return (
     <div
       onClick={onClick}
@@ -273,7 +404,26 @@ function FileRow({ file, isSelected, isIndexed, onClick }: FileRowProps) {
         isSelected ? 'bg-accent-600/10 border-l-2 border-l-accent-500' : 'hover:bg-surface-800/50'
       )}
     >
-      <FileIcon ext={file.ext} />
+      {/* Thumbnail or icon */}
+      {isImg ? (
+        <div className="relative shrink-0">
+          <ImageThumb
+            filePath={file.path}
+            className="w-10 h-10 rounded-md"
+          />
+          {onPreview && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPreview() }}
+              title="Preview image"
+              className="absolute inset-0 flex items-center justify-center bg-black/0 hover:bg-black/40 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+            >
+              <ZoomIn className="w-3.5 h-3.5 text-white drop-shadow" />
+            </button>
+          )}
+        </div>
+      ) : (
+        <FileIcon ext={file.ext} />
+      )}
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -322,10 +472,127 @@ function FileRow({ file, isSelected, isIndexed, onClick }: FileRowProps) {
   )
 }
 
+// ─── Grid Tile ────────────────────────────────────────────────────────────────
+
+interface GridTileProps {
+  file: FileInfo
+  isSelected: boolean
+  isIndexed: boolean
+  onClick: () => void
+  onPreview?: () => void
+}
+
+function GridTile({ file, isSelected, isIndexed, onClick, onPreview }: GridTileProps) {
+  const isImg = isImageFile(file.ext)
+  const { src, loading } = useImagePreview(isImg ? file.path : null)
+
+  const handleOpen = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    window.api.openPath(file.path)
+  }
+
+  return (
+    <div
+      onClick={onClick}
+      className={clsx(
+        'group relative flex flex-col rounded-xl overflow-hidden cursor-pointer border transition-all',
+        isSelected
+          ? 'border-accent-500 bg-accent-600/10'
+          : 'border-surface-700 hover:border-surface-600 bg-surface-800 hover:bg-surface-750'
+      )}
+    >
+      {/* Preview area */}
+      <div className="relative aspect-square bg-surface-900 overflow-hidden">
+        {isImg ? (
+          <>
+            {loading && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="w-5 h-5 text-surface-600 animate-spin" />
+              </div>
+            )}
+            {src && (
+              <img src={src} alt={file.name} className="absolute inset-0 w-full h-full object-cover" />
+            )}
+            {/* Preview button overlay */}
+            {onPreview && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onPreview() }}
+                title="Preview"
+                className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-colors"
+              >
+                <ZoomIn className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
+              </button>
+            )}
+          </>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <FileIcon ext={file.ext} size="lg" />
+          </div>
+        )}
+
+        {/* Indexed dot */}
+        {isIndexed && (
+          <span
+            className="absolute top-2 right-2 w-2 h-2 rounded-full bg-success/80 ring-2 ring-surface-900"
+            title="Indexed"
+          />
+        )}
+      </div>
+
+      {/* Label */}
+      <div className="flex items-center gap-1.5 px-2 py-2 border-t border-surface-700/50">
+        {!isImg && <FileIcon ext={file.ext} size="sm" />}
+        <span className="text-xs text-surface-300 truncate flex-1 font-medium">{file.name}</span>
+        <button
+          onClick={handleOpen}
+          title="Open file"
+          className="shrink-0 p-0.5 text-surface-600 hover:text-surface-300 opacity-0 group-hover:opacity-100 transition-all"
+        >
+          <ExternalLink className="w-3 h-3" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── View Toggle ──────────────────────────────────────────────────────────────
+
+type ViewMode = 'list' | 'grid'
+
+function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
+  return (
+    <div className="inline-flex items-center gap-0.5 bg-surface-800 rounded-lg p-0.5">
+      <button
+        onClick={() => onChange('list')}
+        title="List view"
+        className={clsx(
+          'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
+          mode === 'list' ? 'bg-surface-700 text-surface-100' : 'text-surface-500 hover:text-surface-300'
+        )}
+      >
+        <LayoutList className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => onChange('grid')}
+        title="Grid view"
+        className={clsx(
+          'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
+          mode === 'grid' ? 'bg-surface-700 text-surface-100' : 'text-surface-500 hover:text-surface-300'
+        )}
+      >
+        <LayoutGrid className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  )
+}
+
 // ─── FileGrid ─────────────────────────────────────────────────────────────────
 
 export function FileGrid() {
   const { files, selectedFile, indexedFiles, selectedDirectory, setSelectedFile } = useAppStore()
+  const [viewMode, setViewMode] = useState<ViewMode>('list')
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+
   const indexedPaths = new Set(indexedFiles.map((f) => f.path))
   const indexedCount = files.filter((f) => indexedPaths.has(f.path)).length
 
@@ -336,6 +603,14 @@ export function FileGrid() {
     if (!a.supported && b.supported) return 1
     return a.name.localeCompare(b.name)
   })
+
+  // Image files in sorted order — used for lightbox navigation
+  const imageFiles = sorted.filter((f) => isImageFile(f.ext))
+
+  const openLightbox = (file: FileInfo) => {
+    const idx = imageFiles.findIndex((f) => f.path === file.path)
+    if (idx !== -1) setLightboxIndex(idx)
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -348,22 +623,29 @@ export function FileGrid() {
           {indexedCount > 0 && (
             <> · <span className="text-success/80">{indexedCount} indexed</span></>
           )}
+          {imageFiles.length > 0 && (
+            <> · <span className="text-pink-400/80">{imageFiles.length} image{imageFiles.length !== 1 ? 's' : ''}</span></>
+          )}
         </span>
-        <span className="text-xs text-surface-600">
-          {selectedDirectory.split(/[/\\]/).slice(-2).join('/')}
-        </span>
+
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-surface-600 hidden sm:block">
+            {selectedDirectory.split(/[/\\]/).slice(-2).join('/')}
+          </span>
+          <ViewToggle mode={viewMode} onChange={setViewMode} />
+        </div>
       </div>
 
       {/* Index section */}
       <IndexSection />
 
-      {/* File list */}
+      {/* File list / grid */}
       <div className="flex-1 overflow-y-auto">
         {sorted.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-surface-600 text-sm">No files found in this directory.</p>
           </div>
-        ) : (
+        ) : viewMode === 'list' ? (
           sorted.map((file) => (
             <FileRow
               key={file.path}
@@ -371,10 +653,34 @@ export function FileGrid() {
               isSelected={selectedFile?.path === file.path}
               isIndexed={indexedPaths.has(file.path)}
               onClick={() => setSelectedFile(file)}
+              onPreview={isImageFile(file.ext) ? () => openLightbox(file) : undefined}
             />
           ))
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3">
+            {sorted.map((file) => (
+              <GridTile
+                key={file.path}
+                file={file}
+                isSelected={selectedFile?.path === file.path}
+                isIndexed={indexedPaths.has(file.path)}
+                onClick={() => setSelectedFile(file)}
+                onPreview={isImageFile(file.ext) ? () => openLightbox(file) : undefined}
+              />
+            ))}
+          </div>
         )}
       </div>
+
+      {/* Lightbox */}
+      {lightboxIndex !== null && imageFiles.length > 0 && (
+        <Lightbox
+          files={imageFiles}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onChange={setLightboxIndex}
+        />
+      )}
     </div>
   )
 }
