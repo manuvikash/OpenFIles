@@ -3,8 +3,12 @@ import { GoogleGeminiEmbeddingFunction } from '@chroma-core/google-gemini'
 
 let client: ChromaClient | null = null
 let embeddingFunction: GoogleGeminiEmbeddingFunction | null = null
+let chromaPort = 8765
+let geminiApiKey = ''
+let embeddingModelName = 'gemini-embedding-2-preview'
 
 export function initChromaClient(port = 8765): ChromaClient {
+  chromaPort = port
   client = new ChromaClient({ path: `http://localhost:${port}` })
   return client
 }
@@ -14,11 +18,10 @@ export function getClient(): ChromaClient {
   return client
 }
 
-export function initEmbeddingFunction(apiKey: string, model = 'gemini-embedding-001'): GoogleGeminiEmbeddingFunction {
-  embeddingFunction = new GoogleGeminiEmbeddingFunction({
-    apiKey,
-    modelName: model
-  })
+export function initEmbeddingFunction(apiKey: string, model = 'gemini-embedding-2-preview'): GoogleGeminiEmbeddingFunction {
+  geminiApiKey = apiKey
+  embeddingModelName = model
+  embeddingFunction = new GoogleGeminiEmbeddingFunction({ apiKey, modelName: model })
   return embeddingFunction
 }
 
@@ -58,12 +61,37 @@ export async function listCollections(): Promise<string[]> {
 
 export async function heartbeat(): Promise<boolean> {
   try {
-    const c = getClient()
-    await c.heartbeat()
-    return true
+    const res = await fetch(`http://localhost:${chromaPort}/api/v2/heartbeat`)
+    return res.ok
   } catch {
     return false
   }
+}
+
+// ─── Multimodal embedding ─────────────────────────────────────────────────────
+
+/**
+ * Generate an embedding vector for a binary media file by calling the
+ * Gemini Embedding API directly with base64-encoded inlineData.
+ * Supports images (JPEG/PNG), audio, and video (MP4/MOV).
+ */
+export async function embedMultimodal(base64: string, mimeType: string): Promise<number[]> {
+  if (!geminiApiKey) throw new Error('Gemini API key not set. Open Settings and add your API key.')
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${embeddingModelName}:embedContent?key=${geminiApiKey}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: `models/${embeddingModelName}`,
+      content: { parts: [{ inlineData: { mimeType, data: base64 } }] }
+    })
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Gemini embed failed (${res.status}): ${body}`)
+  }
+  const data = await res.json()
+  return data.embedding.values as number[]
 }
 
 // ─── Collection Helpers ───────────────────────────────────────────────────────
@@ -86,6 +114,23 @@ export async function addDocuments(params: AddDocumentsParams): Promise<void> {
       metadatas: metadatas.slice(i, i + BATCH)
     })
   }
+}
+
+export interface AddWithEmbeddingsParams {
+  collection: Collection
+  ids: string[]
+  embeddings: number[][]
+  documents: string[]
+  metadatas: Record<string, string | number | boolean>[]
+}
+
+/**
+ * Add pre-computed embedding vectors directly to ChromaDB.
+ * Used for binary media files where we call the Gemini API ourselves.
+ */
+export async function addDocumentsWithEmbeddings(params: AddWithEmbeddingsParams): Promise<void> {
+  const { collection, ids, embeddings, documents, metadatas } = params
+  await collection.add({ ids, embeddings, documents, metadatas })
 }
 
 export interface QueryParams {

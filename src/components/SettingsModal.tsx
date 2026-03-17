@@ -1,5 +1,8 @@
 import { useState } from 'react'
-import { X, Eye, EyeOff, ExternalLink, AlertCircle, CheckCircle, Loader2, Database, Key, Sliders } from 'lucide-react'
+import {
+  X, Eye, EyeOff, ExternalLink, AlertCircle, CheckCircle,
+  Loader2, Database, Key, Sliders, FolderOpen, Scan
+} from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
 import { initChromaClient, initEmbeddingFunction, heartbeat } from '@/lib/chromaClient'
@@ -21,16 +24,16 @@ function Field({ label, hint, children }: FieldProps) {
 }
 
 export function SettingsModal() {
-  const { settings, setSettings, setShowSettings, chromaStatus, setChromaStatus, setChromaPort } = useAppStore()
+  const { settings, setSettings, setShowSettings, setChromaStatus, setChromaPort } = useAppStore()
 
   const [draft, setDraft] = useState({ ...settings })
   const [showKey, setShowKey] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [detecting, setDetecting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const handleSave = () => {
     setSettings(draft)
-    // Re-initialise clients with new settings
     initChromaClient(draft.chromaPort)
     if (draft.geminiApiKey) {
       initEmbeddingFunction(draft.geminiApiKey, draft.embeddingModel)
@@ -45,7 +48,7 @@ export function SettingsModal() {
     try {
       initChromaClient(draft.chromaPort)
       const ok = await heartbeat()
-      setTestResult({ ok, msg: ok ? `Connected on port ${draft.chromaPort}` : 'Could not reach ChromaDB' })
+      setTestResult({ ok, msg: ok ? `Connected on port ${draft.chromaPort}` : 'Could not reach ChromaDB — is it running?' })
       setChromaStatus(ok ? 'running' : 'error')
     } catch (err) {
       setTestResult({ ok: false, msg: String(err) })
@@ -57,19 +60,45 @@ export function SettingsModal() {
 
   const handleStartChroma = async () => {
     setChromaStatus('starting')
-    const result = await window.api.startChroma()
-    if (result.success) {
-      setChromaStatus('running')
-      setTestResult({ ok: true, msg: result.message })
-    } else {
-      setChromaStatus('error')
-      setTestResult({ ok: false, msg: result.message })
+    setTestResult(null)
+    const result = await window.api.startChroma({
+      customBinaryPath: draft.chromaBinaryPath || undefined,
+      port: draft.chromaPort
+    })
+    setChromaStatus(result.success ? 'running' : 'error')
+    setTestResult({ ok: result.success, msg: result.message })
+  }
+
+  const handleDetectBinary = async () => {
+    setDetecting(true)
+    setTestResult(null)
+    try {
+      const { bin, checked } = await window.api.detectChroma(draft.chromaBinaryPath || undefined)
+      if (bin) {
+        setDraft((d) => ({ ...d, chromaBinaryPath: bin }))
+        setTestResult({ ok: true, msg: `Found: ${bin}` })
+      } else {
+        setTestResult({
+          ok: false,
+          msg: `Could not auto-detect chroma binary.\nChecked:\n${checked.join('\n')}\n\nRun "pip install chromadb" or browse to set the path manually.`
+        })
+      }
+    } catch (err) {
+      setTestResult({ ok: false, msg: String(err) })
+    } finally {
+      setDetecting(false)
     }
+  }
+
+  const handleBrowseBinary = async () => {
+    const p = await window.api.openFileForBinary()
+    if (p) setDraft((d) => ({ ...d, chromaBinaryPath: p }))
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">
@@ -85,17 +114,15 @@ export function SettingsModal() {
         </div>
 
         <div className="px-6 py-5 flex flex-col gap-6">
-          {/* API Key section */}
+
+          {/* ── Gemini API ───────────────────────────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Key className="w-4 h-4 text-surface-500" />
               <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">Gemini API</h3>
             </div>
 
-            <Field
-              label="API Key"
-              hint="Your key is stored locally and never sent anywhere except Google's API."
-            >
+            <Field label="API Key" hint="Stored locally — never uploaded.">
               <div className="relative">
                 <input
                   type={showKey ? 'text' : 'password'}
@@ -112,16 +139,13 @@ export function SettingsModal() {
                   {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <a
-                href="https://aistudio.google.com/apikey"
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                onClick={() => window.api.openPath('https://aistudio.google.com/apikey')}
                 className="inline-flex items-center gap-1 text-xs text-accent-400 hover:text-accent-300 mt-1.5"
-                onClick={(e) => { e.preventDefault(); window.api.openPath('https://aistudio.google.com/apikey') }}
               >
                 Get a free API key at Google AI Studio
                 <ExternalLink className="w-3 h-3" />
-              </a>
+              </button>
             </Field>
 
             <Field label="Embedding Model">
@@ -130,26 +154,57 @@ export function SettingsModal() {
                 onChange={(e) => setDraft({ ...draft, embeddingModel: e.target.value })}
                 className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-200 focus:outline-none focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 transition-all"
               >
-                <option value="gemini-embedding-001">gemini-embedding-001 (recommended)</option>
+                <option value="gemini-embedding-2-preview">gemini-embedding-2-preview (recommended)</option>
+                <option value="gemini-embedding-001">gemini-embedding-001</option>
                 <option value="text-embedding-004">text-embedding-004</option>
               </select>
             </Field>
           </div>
 
-          {/* ChromaDB section */}
+          {/* ── ChromaDB ─────────────────────────────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Database className="w-4 h-4 text-surface-500" />
               <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">ChromaDB</h3>
             </div>
 
-            <Field label="Port" hint="ChromaDB runs locally on this port.">
+            <Field
+              label="chroma Binary Path"
+              hint='Leave blank for auto-detect. Set manually if auto-detect fails (e.g. C:\Users\you\AppData\Local\Programs\Python\Python313\Scripts\chroma.EXE).'
+            >
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={draft.chromaBinaryPath}
+                  onChange={(e) => setDraft({ ...draft, chromaBinaryPath: e.target.value })}
+                  placeholder="Auto-detect"
+                  className="flex-1 bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-200 placeholder-surface-600 focus:outline-none focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 transition-all font-mono"
+                />
+                <button
+                  onClick={handleDetectBinary}
+                  disabled={detecting}
+                  title="Auto-detect"
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs bg-surface-700 hover:bg-surface-600 text-surface-200 rounded-lg transition-colors shrink-0"
+                >
+                  {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Scan className="w-3.5 h-3.5" />}
+                  Detect
+                </button>
+                <button
+                  onClick={handleBrowseBinary}
+                  title="Browse"
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs bg-surface-700 hover:bg-surface-600 text-surface-200 rounded-lg transition-colors shrink-0"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </Field>
+
+            <Field label="Port" hint="ChromaDB listens on this local port.">
               <input
                 type="number"
                 value={draft.chromaPort}
                 onChange={(e) => setDraft({ ...draft, chromaPort: Number(e.target.value) })}
-                min={1024}
-                max={65535}
+                min={1024} max={65535}
                 className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-200 focus:outline-none focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 transition-all"
               />
             </Field>
@@ -173,19 +228,21 @@ export function SettingsModal() {
 
             {testResult && (
               <div className={clsx(
-                'flex items-center gap-2 mt-2 text-xs',
-                testResult.ok ? 'text-success' : 'text-danger'
+                'flex items-start gap-2 mt-3 text-xs rounded-lg px-3 py-2 border',
+                testResult.ok
+                  ? 'text-success bg-success/10 border-success/30'
+                  : 'text-danger bg-danger/10 border-danger/30'
               )}>
                 {testResult.ok
-                  ? <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-                  : <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  ? <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 }
-                {testResult.msg}
+                <span className="whitespace-pre-wrap break-all">{testResult.msg}</span>
               </div>
             )}
           </div>
 
-          {/* Indexing section */}
+          {/* ── Indexing ─────────────────────────────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Sliders className="w-4 h-4 text-surface-500" />

@@ -20,28 +20,29 @@ export default function App() {
     setShowSettings
   } = useAppStore()
 
+
   // ─── Boot sequence ──────────────────────────────────────────────────────────
 
   const bootChroma = useCallback(async () => {
     setChromaStatus('starting')
-
-    // Initialise the JS client pointing at local ChromaDB
     initChromaClient(chromaPort)
 
-    // Try to connect to an already-running instance first
+    // If already running (e.g. previous session left it open), use it immediately
     const alive = await heartbeat()
     if (alive) {
       setChromaStatus('running')
       return
     }
 
-    // Ask the main process to start it
-    const result = await window.api.startChroma()
+    // Ask the main process to start ChromaDB, passing the user-configured binary
+    // path and port so it never falls back to a wrong binary
+    const result = await window.api.startChroma({
+      customBinaryPath: settings.chromaBinaryPath || undefined,
+      port: chromaPort
+    })
+
     if (result.success) {
-      // Give it a moment to be ready then verify
-      await new Promise((r) => setTimeout(r, 1500))
-      const ok = await heartbeat()
-      setChromaStatus(ok ? 'running' : 'error')
+      setChromaStatus('running')
       if (result.port !== chromaPort) {
         setChromaPort(result.port)
         initChromaClient(result.port)
@@ -49,7 +50,7 @@ export default function App() {
     } else {
       setChromaStatus('error')
     }
-  }, [chromaPort, setChromaStatus, setChromaPort])
+  }, [chromaPort, settings.chromaBinaryPath, setChromaStatus, setChromaPort])
 
   const initEmbeddings = useCallback(() => {
     if (settings.geminiApiKey) {

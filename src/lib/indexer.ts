@@ -1,8 +1,10 @@
 import type { FileInfo, IndexedFile, AppSettings } from '@/types'
-import { chunkText, generateSnippet } from './fileParser'
+import { chunkText, generateSnippet, isBinaryMediaFile } from './fileParser'
 import {
   getOrCreateCollection,
   addDocuments,
+  addDocumentsWithEmbeddings,
+  embedMultimodal,
   deleteByFilePath,
   countDocuments,
   deleteCollection,
@@ -35,15 +37,22 @@ export function collectionNameFromDir(dirPath: string): string {
 
 /**
  * Index a list of files into ChromaDB.
+ * Text/code files are chunked and embedded via the collection's embedding function.
+ * Binary media files (images, audio, video) are embedded directly via the
+ * Gemini Embedding 2 multimodal API and stored with pre-computed vectors.
+ *
+ * Pass `existingCollectionName` to reuse the collection that was created during
+ * a previous indexing run (important when only indexing a subset of files).
  */
 export async function indexFiles(
   files: FileInfo[],
   settings: AppSettings,
   onProgress: ProgressCallback,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  existingCollectionName?: string
 ): Promise<{ collectionName: string; result: IndexResult }> {
   const supported = files.filter((f) => f.supported)
-  const collectionName = collectionNameFromDir(
+  const collectionName = existingCollectionName ?? collectionNameFromDir(
     files[0]?.path.split(/[/\\]/).slice(0, -1).join('/') ?? 'openfiles'
   )
 
@@ -57,31 +66,11 @@ export async function indexFiles(
     onProgress(i, supported.length, file.name)
 
     try {
-      const text = await window.api.readFileContent(file.path)
-      if (!text?.trim()) { result.skipped++; continue }
-
-      // Remove old chunks for this file (re-index if content changed)
-      await deleteByFilePath(collection, file.path)
-
-      const chunks = chunkText(text, settings.chunkSize, settings.chunkOverlap, file.ext)
-      if (chunks.length === 0) { result.skipped++; continue }
-
-      const ids = chunks.map((_, idx) => `${encodeId(file.path)}::${idx}`)
-      const documents = chunks.map((c) => c.text)
-      const metadatas = chunks.map((c) => ({
-        filePath: file.path,
-        fileName: file.name,
-        ext: file.ext,
-        size: file.size,
-        modified: file.modified,
-        chunkIndex: c.index,
-        charStart: c.charStart,
-        charEnd: c.charEnd,
-        snippet: generateSnippet(c.text, 300)
-      }))
-
-      await addDocuments({ collection, ids, documents, metadatas } as AddDocumentsParams)
-      result.indexed++
+      if (isBinaryMediaFile(file.ext)) {
+        await indexBinaryFile(file, collection, result)
+      } else {
+        await indexTextFile(file, collection, settings, result)
+      }
     } catch (err) {
       result.errors.push(`${file.name}: ${String(err)}`)
     }
@@ -89,6 +78,73 @@ export async function indexFiles(
 
   onProgress(supported.length, supported.length, '')
   return { collectionName, result }
+}
+
+async function indexBinaryFile(
+  file: FileInfo,
+  collection: Collection,
+  result: IndexResult
+): Promise<void> {
+  const binary = await window.api.readFileBinary(file.path)
+  if (!binary) { result.skipped++; return }
+
+  await deleteByFilePath(collection, file.path)
+
+  const embedding = await embedMultimodal(binary.base64, binary.mimeType)
+  const mediaType = binary.mimeType.split('/')[0] // 'image' | 'audio' | 'video'
+  const label = `[${mediaType}] ${file.name}`
+
+  await addDocumentsWithEmbeddings({
+    collection,
+    ids: [`${encodeId(file.path)}::0`],
+    embeddings: [embedding],
+    documents: [label],
+    metadatas: [{
+      filePath: file.path,
+      fileName: file.name,
+      ext: file.ext,
+      size: file.size,
+      modified: file.modified,
+      chunkIndex: 0,
+      charStart: 0,
+      charEnd: 0,
+      snippet: label,
+      mediaType: binary.mimeType
+    }]
+  })
+  result.indexed++
+}
+
+async function indexTextFile(
+  file: FileInfo,
+  collection: Collection,
+  settings: AppSettings,
+  result: IndexResult
+): Promise<void> {
+  const text = await window.api.readFileContent(file.path)
+  if (!text?.trim()) { result.skipped++; return }
+
+  await deleteByFilePath(collection, file.path)
+
+  const chunks = chunkText(text, settings.chunkSize, settings.chunkOverlap, file.ext)
+  if (chunks.length === 0) { result.skipped++; return }
+
+  const ids = chunks.map((_, idx) => `${encodeId(file.path)}::${idx}`)
+  const documents = chunks.map((c) => c.text)
+  const metadatas = chunks.map((c) => ({
+    filePath: file.path,
+    fileName: file.name,
+    ext: file.ext,
+    size: file.size,
+    modified: file.modified,
+    chunkIndex: c.index,
+    charStart: c.charStart,
+    charEnd: c.charEnd,
+    snippet: generateSnippet(c.text, 300)
+  }))
+
+  await addDocuments({ collection, ids, documents, metadatas } as AddDocumentsParams)
+  result.indexed++
 }
 
 /**
@@ -110,6 +166,38 @@ export async function reindexFile(
   settings: AppSettings
 ): Promise<IndexedFile | null> {
   try {
+    if (isBinaryMediaFile(file.ext)) {
+      const binary = await window.api.readFileBinary(file.path)
+      if (!binary) return null
+
+      await deleteByFilePath(collection, file.path)
+
+      const embedding = await embedMultimodal(binary.base64, binary.mimeType)
+      const mediaType = binary.mimeType.split('/')[0]
+      const label = `[${mediaType}] ${file.name}`
+
+      await addDocumentsWithEmbeddings({
+        collection,
+        ids: [`${encodeId(file.path)}::0`],
+        embeddings: [embedding],
+        documents: [label],
+        metadatas: [{
+          filePath: file.path,
+          fileName: file.name,
+          ext: file.ext,
+          size: file.size,
+          modified: file.modified,
+          chunkIndex: 0,
+          charStart: 0,
+          charEnd: 0,
+          snippet: label,
+          mediaType: binary.mimeType
+        }]
+      })
+
+      return { path: file.path, name: file.name, ext: file.ext, size: file.size, modified: file.modified, chunkCount: 1, indexedAt: Date.now() }
+    }
+
     const text = await window.api.readFileContent(file.path)
     if (!text?.trim()) return null
 

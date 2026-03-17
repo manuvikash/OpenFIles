@@ -144,7 +144,7 @@ OpenFiles/
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Gemini API Key | _(required)_ | Your Google AI Studio key |
-| Embedding Model | `gemini-embedding-001` | Gemini model for embeddings |
+| Embedding Model | `gemini-embedding-2-preview` | Gemini model for embeddings |
 | ChromaDB Port | `8765` | Local ChromaDB HTTP server port |
 | Chunk Size | `512` | Approx tokens per text chunk |
 | Chunk Overlap | `64` | Overlapping tokens between chunks |

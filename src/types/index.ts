@@ -66,6 +66,7 @@ export interface SearchState {
 export interface AppSettings {
   geminiApiKey: string
   chromaPort: number
+  chromaBinaryPath: string   // '' = auto-detect; set by user if auto-detect fails
   chunkSize: number
   chunkOverlap: number
   maxResults: number
@@ -76,10 +77,11 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   geminiApiKey: '',
   chromaPort: 8765,
+  chromaBinaryPath: '',
   chunkSize: 512,
   chunkOverlap: 64,
   maxResults: 20,
-  embeddingModel: 'gemini-embedding-001',
+  embeddingModel: 'gemini-embedding-2-preview',
   embeddingDimension: 768
 }
 
@@ -127,12 +129,15 @@ export interface ElectronAPI {
 
   scanDirectory: (dirPath: string) => Promise<FileInfo[]>
   readFileContent: (filePath: string) => Promise<string>
+  readFileBinary: (filePath: string) => Promise<{ base64: string; mimeType: string } | null>
   getDirectoryTree: (dirPath: string) => Promise<DirNode>
   getFileStat: (filePath: string) => Promise<{ size: number; modified: number } | null>
 
-  startChroma: () => Promise<{ success: boolean; port: number; message: string }>
+  startChroma: (opts?: { customBinaryPath?: string; port?: number }) => Promise<{ success: boolean; port: number; message: string }>
+  detectChroma: (userPath?: string) => Promise<{ bin: string | null; checked: string[] }>
   getChromaDataPath: () => Promise<string>
   isChromaReady: () => Promise<boolean>
+  openFileForBinary: () => Promise<string | null>
 
   openPath: (filePath: string) => Promise<string>
   showItemInFolder: (filePath: string) => Promise<void>

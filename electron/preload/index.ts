@@ -5,67 +5,47 @@ const api = {
   // Window controls
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
-  close: () => ipcRenderer.invoke('window:close'),
+  close:    () => ipcRenderer.invoke('window:close'),
 
   // Dialogs
-  openDirectory: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:openDirectory'),
-  openFile: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:openFile'),
+  openDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:openDirectory'),
+  openFile:      (): Promise<string | null> => ipcRenderer.invoke('dialog:openFile'),
+  openFileForBinary: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFileForBinary'),
 
   // File system
-  scanDirectory: (dirPath: string): Promise<FileInfo[]> =>
-    ipcRenderer.invoke('fs:scanDirectory', dirPath),
-  readFileContent: (filePath: string): Promise<string> =>
-    ipcRenderer.invoke('fs:readFileContent', filePath),
-  getDirectoryTree: (dirPath: string): Promise<DirNode> =>
-    ipcRenderer.invoke('fs:getDirectoryTree', dirPath),
-  getFileStat: (filePath: string): Promise<{ size: number; modified: number } | null> =>
-    ipcRenderer.invoke('fs:getFileStat', filePath),
+  scanDirectory:    (dirPath: string)  => ipcRenderer.invoke('fs:scanDirectory',    dirPath),
+  readFileContent:  (filePath: string) => ipcRenderer.invoke('fs:readFileContent',  filePath),
+  readFileBinary:   (filePath: string) => ipcRenderer.invoke('fs:readFileBinary',   filePath),
+  getDirectoryTree: (dirPath: string)  => ipcRenderer.invoke('fs:getDirectoryTree', dirPath),
+  getFileStat:      (filePath: string) => ipcRenderer.invoke('fs:getFileStat',      filePath),
 
   // ChromaDB
-  startChroma: (): Promise<{ success: boolean; port: number; message: string }> =>
-    ipcRenderer.invoke('chroma:start'),
-  getChromaDataPath: (): Promise<string> =>
-    ipcRenderer.invoke('chroma:getDataPath'),
-  isChromaReady: (): Promise<boolean> =>
-    ipcRenderer.invoke('chroma:isReady'),
+  startChroma: (opts?: { customBinaryPath?: string; port?: number })
+    : Promise<{ success: boolean; port: number; message: string }> =>
+    ipcRenderer.invoke('chroma:start', opts ?? {}),
+
+  detectChroma: (userPath?: string)
+    : Promise<{ bin: string | null; checked: string[] }> =>
+    ipcRenderer.invoke('chroma:detect', userPath),
+
+  getChromaDataPath: (): Promise<string>  => ipcRenderer.invoke('chroma:getDataPath'),
+  isChromaReady:     (): Promise<boolean> => ipcRenderer.invoke('chroma:isReady'),
 
   // Shell
-  openPath: (filePath: string): Promise<string> =>
-    ipcRenderer.invoke('shell:openPath', filePath),
-  showItemInFolder: (filePath: string): Promise<void> =>
-    ipcRenderer.invoke('shell:showItemInFolder', filePath)
+  openPath:          (filePath: string) => ipcRenderer.invoke('shell:openPath',          filePath),
+  showItemInFolder:  (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder',   filePath),
 }
 
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
-  } catch (error) {
-    console.error(error)
+  } catch (err) {
+    console.error(err)
   }
 } else {
-  // @ts-ignore
+  // @ts-ignore (non-sandboxed fallback)
   window.electron = electronAPI
   // @ts-ignore
   window.api = api
-}
-
-// Type declarations for the renderer
-export interface FileInfo {
-  name: string
-  path: string
-  ext: string
-  size: number
-  modified: number
-  supported: boolean
-}
-
-export interface DirNode {
-  name: string
-  path: string
-  type: 'file' | 'directory'
-  children?: DirNode[]
-  ext?: string
 }

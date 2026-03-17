@@ -229,19 +229,44 @@ export function getFileIconInfo(ext: string): { icon: string; color: string } {
     '.html': { icon: 'code', color: 'text-orange-400' },
     '.css':  { icon: 'code', color: 'text-blue-400' },
     '.scss': { icon: 'code', color: 'text-pink-300' },
-    '.sql':  { icon: 'database', color: 'text-green-300' },
-    '.sh':   { icon: 'terminal', color: 'text-green-400' },
-    '.bash': { icon: 'terminal', color: 'text-green-400' },
+    '.sql':  { icon: 'database',   color: 'text-green-300' },
+    '.sh':   { icon: 'terminal',   color: 'text-green-400' },
+    '.bash': { icon: 'terminal',   color: 'text-green-400' },
+    // Images
+    '.jpg':  { icon: 'image',      color: 'text-pink-400' },
+    '.jpeg': { icon: 'image',      color: 'text-pink-400' },
+    '.png':  { icon: 'image',      color: 'text-pink-300' },
+    // Video
+    '.mp4':  { icon: 'video',      color: 'text-violet-400' },
+    '.mov':  { icon: 'video',      color: 'text-violet-300' },
+    // Audio
+    '.mp3':  { icon: 'music',      color: 'text-teal-400' },
+    '.wav':  { icon: 'music',      color: 'text-teal-300' },
+    '.m4a':  { icon: 'music',      color: 'text-teal-400' },
+    '.ogg':  { icon: 'music',      color: 'text-teal-300' },
+    '.flac': { icon: 'music',      color: 'text-teal-400' },
+    '.aac':  { icon: 'music',      color: 'text-teal-300' },
   }
   return map[ext] ?? { icon: 'file', color: 'text-surface-400' }
 }
 
+// Binary media files — embedded natively by gemini-embedding-2-preview
+export const BINARY_MEDIA_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png',
+  '.mp4', '.mov',
+  '.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'
+])
+
+export function isBinaryMediaFile(ext: string): boolean {
+  return BINARY_MEDIA_EXTENSIONS.has(ext)
+}
+
 export function isTextFile(ext: string): boolean {
-  return !new Set(['.pdf', '.docx', '.doc']).has(ext)
+  return !new Set(['.pdf', '.docx', '.doc', ...BINARY_MEDIA_EXTENSIONS]).has(ext)
 }
 
 export function isSupportedExtension(ext: string): boolean {
-  const SUPPORTED = new Set([
+  const TEXT_SUPPORTED = new Set([
     '.txt', '.md', '.pdf', '.docx', '.csv', '.mdx',
     '.py', '.js', '.ts', '.jsx', '.tsx',
     '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp',
@@ -251,5 +276,5 @@ export function isSupportedExtension(ext: string): boolean {
     '.xml', '.html', '.css', '.scss', '.sass', '.less',
     '.vue', '.svelte', '.astro'
   ])
-  return SUPPORTED.has(ext)
+  return TEXT_SUPPORTED.has(ext) || BINARY_MEDIA_EXTENSIONS.has(ext)
 }

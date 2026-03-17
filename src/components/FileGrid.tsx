@@ -2,7 +2,8 @@ import { useCallback, useState } from 'react'
 import {
   FileText, File, Code, Braces, Database, Terminal,
   Table, ExternalLink, FolderOpen, FolderSearch,
-  Loader2, CheckCircle, AlertCircle, Play
+  Loader2, CheckCircle, AlertCircle, Play,
+  Image, Video, Music
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
@@ -15,7 +16,8 @@ import { collectionNameFromDir } from '@/lib/indexer'
 
 const ICON_MAP: Record<string, React.ElementType> = {
   'file-text': FileText, 'code': Code, 'braces': Braces,
-  'database': Database, 'terminal': Terminal, 'table': Table, 'file': File
+  'database': Database, 'terminal': Terminal, 'table': Table, 'file': File,
+  'image': Image, 'video': Video, 'music': Music
 }
 
 function FileIcon({ ext, size = 'md' }: { ext: string; size?: 'sm' | 'md' | 'lg' }) {
@@ -68,60 +70,80 @@ function EmptyState() {
 
 function IndexSection() {
   const {
-    files, settings, collectionName, indexingProgress,
-    setIndexingProgress, setIndexedFiles, addIndexedFile, setCollectionName,
+    files, settings, collectionName, indexedFiles, indexingProgress,
+    setIndexingProgress, addIndexedFile, setCollectionName,
     chromaStatus
   } = useAppStore()
 
   const [abortController, setAbortController] = useState<AbortController | null>(null)
 
   const supportedFiles = files.filter((f) => f.supported)
+
+  // Build a lookup of already-indexed files keyed by path
+  const indexedMap = new Map(indexedFiles.map((f) => [f.path, f]))
+
+  // Incremental: only index files that are new or modified since last indexed
+  const filesToIndex = supportedFiles.filter((f) => {
+    const prev = indexedMap.get(f.path)
+    return !prev || f.modified > prev.indexedAt
+  })
+  const unchangedCount = supportedFiles.length - filesToIndex.length
+  const allUpToDate = filesToIndex.length === 0 && supportedFiles.length > 0
+
   const isIndexing = indexingProgress.status === 'indexing'
   const isComplete = indexingProgress.status === 'complete'
   const hasError = indexingProgress.status === 'error'
   const canIndex = chromaStatus === 'running' && settings.geminiApiKey !== '' && !isIndexing
 
-  const handleIndex = useCallback(async () => {
+  const handleIndex = useCallback(async (forceAll = false) => {
     if (!canIndex || supportedFiles.length === 0) return
+
+    const queue = forceAll ? supportedFiles : filesToIndex
+    if (queue.length === 0) return
 
     const ac = new AbortController()
     setAbortController(ac)
-    setIndexedFiles([])
-    setIndexingProgress({ status: 'indexing', total: supportedFiles.length, indexed: 0, current: '' })
+    setIndexingProgress({ status: 'indexing', total: queue.length, indexed: 0, current: '' })
 
     try {
       const { collectionName: name, result } = await indexFiles(
-        supportedFiles,
+        queue,
         settings,
         (indexed, total, current) => {
           setIndexingProgress({ indexed, total, current, status: 'indexing' })
         },
-        ac.signal
+        ac.signal,
+        collectionName ?? undefined  // reuse existing collection name
       )
 
       setCollectionName(name)
-      setIndexingProgress({
-        status: 'complete',
-        indexed: result.indexed,
-        total: supportedFiles.length,
-        current: '',
-        error: result.errors.length > 0 ? `${result.errors.length} file(s) failed` : undefined
-      })
 
-      // Store indexed file records
-      for (const f of supportedFiles) {
+      const now = Date.now()
+      for (const f of queue) {
         addIndexedFile({
           path: f.path, name: f.name, ext: f.ext,
           size: f.size, modified: f.modified,
-          chunkCount: 0, indexedAt: Date.now()
+          chunkCount: 0, indexedAt: now
         })
       }
+
+      const skippedMsg = (!forceAll && unchangedCount > 0) ? `, ${unchangedCount} unchanged` : ''
+      setIndexingProgress({
+        status: 'complete',
+        indexed: result.indexed,
+        total: queue.length,
+        current: '',
+        error: result.errors.length > 0
+          ? `${result.errors.length} failed${skippedMsg}`
+          : skippedMsg ? `0 failed${skippedMsg}` : undefined
+      })
     } catch (err) {
       setIndexingProgress({ status: 'error', error: String(err) })
     } finally {
       setAbortController(null)
     }
-  }, [canIndex, supportedFiles, settings, setIndexingProgress, setIndexedFiles, addIndexedFile, setCollectionName])
+  }, [canIndex, supportedFiles, filesToIndex, unchangedCount, collectionName, settings,
+      setIndexingProgress, addIndexedFile, setCollectionName])
 
   const handleCancel = () => {
     abortController?.abort()
@@ -133,6 +155,17 @@ function IndexSection() {
     : 0
 
   if (supportedFiles.length === 0) return null
+
+  // Build idle status label
+  const idleLabel = (() => {
+    if (hasError) return `Error: ${indexingProgress.error}`
+    if (isComplete) {
+      return `Indexed ${indexingProgress.indexed} of ${indexingProgress.total}${indexingProgress.error ? ` (${indexingProgress.error})` : ''}`
+    }
+    if (allUpToDate) return `All ${supportedFiles.length} files up to date`
+    if (unchangedCount > 0) return `${filesToIndex.length} new/modified · ${unchangedCount} up to date`
+    return `${supportedFiles.length} files ready to index`
+  })()
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 bg-surface-850 border-b border-surface-800 shrink-0">
@@ -164,37 +197,45 @@ function IndexSection() {
         </>
       ) : (
         <>
-          {isComplete && (
+          {(isComplete || allUpToDate) && !hasError && (
             <CheckCircle className="w-4 h-4 text-success shrink-0" />
           )}
           {hasError && (
             <AlertCircle className="w-4 h-4 text-danger shrink-0" />
           )}
-          {!isComplete && !hasError && (
+          {!isComplete && !allUpToDate && !hasError && (
             <Database className="w-4 h-4 text-surface-500 shrink-0" />
           )}
 
-          <span className="text-xs text-surface-400 flex-1">
-            {isComplete
-              ? `Indexed ${indexingProgress.indexed} of ${indexingProgress.total} files${indexingProgress.error ? ` (${indexingProgress.error})` : ''}`
-              : hasError
-              ? `Error: ${indexingProgress.error}`
-              : `${supportedFiles.length} files ready to index`}
-          </span>
+          <span className="text-xs text-surface-400 flex-1">{idleLabel}</span>
 
-          <button
-            onClick={handleIndex}
-            disabled={!canIndex}
-            className={clsx(
-              'flex items-center gap-2 px-4 py-1.5 text-xs font-medium rounded-lg transition-colors shrink-0',
-              canIndex
-                ? 'bg-accent-600 hover:bg-accent-500 text-white'
-                : 'bg-surface-700 text-surface-500 cursor-not-allowed'
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Force re-index all — shown when files are already up to date */}
+            {allUpToDate && (
+              <button
+                onClick={() => handleIndex(true)}
+                disabled={!canIndex}
+                title="Force re-index all files"
+                className="px-3 py-1.5 text-xs text-surface-400 hover:text-surface-200 bg-surface-700 hover:bg-surface-600 disabled:opacity-40 rounded-lg transition-colors"
+              >
+                Re-index all
+              </button>
             )}
-          >
-            <Play className="w-3 h-3" />
-            {isComplete ? 'Re-index' : 'Index Files'}
-          </button>
+
+            <button
+              onClick={() => handleIndex(false)}
+              disabled={!canIndex || allUpToDate}
+              className={clsx(
+                'flex items-center gap-2 px-4 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                canIndex && !allUpToDate
+                  ? 'bg-accent-600 hover:bg-accent-500 text-white'
+                  : 'bg-surface-700 text-surface-500 cursor-not-allowed'
+              )}
+            >
+              <Play className="w-3 h-3" />
+              {filesToIndex.length > 0 && unchangedCount > 0 ? 'Update Index' : 'Index Files'}
+            </button>
+          </div>
         </>
       )}
     </div>
@@ -283,6 +324,7 @@ function FileRow({ file, isSelected, isIndexed, onClick }: FileRowProps) {
 export function FileGrid() {
   const { files, selectedFile, indexedFiles, selectedDirectory, setSelectedFile } = useAppStore()
   const indexedPaths = new Set(indexedFiles.map((f) => f.path))
+  const indexedCount = files.filter((f) => indexedPaths.has(f.path)).length
 
   if (!selectedDirectory) return <EmptyState />
 
@@ -300,6 +342,9 @@ export function FileGrid() {
           {files.length} file{files.length !== 1 ? 's' : ''}
           {' · '}
           <span className="text-surface-400">{files.filter(f => f.supported).length} indexable</span>
+          {indexedCount > 0 && (
+            <> · <span className="text-success/80">{indexedCount} indexed</span></>
+          )}
         </span>
         <span className="text-xs text-surface-600">
           {selectedDirectory.split(/[/\\]/).slice(-2).join('/')}
