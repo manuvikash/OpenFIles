@@ -15,7 +15,8 @@ const api = {
   // File system
   scanDirectory:    (dirPath: string)  => ipcRenderer.invoke('fs:scanDirectory',    dirPath),
   readFileContent:  (filePath: string) => ipcRenderer.invoke('fs:readFileContent',  filePath),
-  readFileBinary:   (filePath: string) => ipcRenderer.invoke('fs:readFileBinary',   filePath),
+  readFileBinary:    (filePath: string)              => ipcRenderer.invoke('fs:readFileBinary',    filePath),
+  readFileThumbnail: (filePath: string, maxDim?: number) => ipcRenderer.invoke('fs:readFileThumbnail', filePath, maxDim),
   getDirectoryTree: (dirPath: string)  => ipcRenderer.invoke('fs:getDirectoryTree', dirPath),
   getFileStat:      (filePath: string) => ipcRenderer.invoke('fs:getFileStat',      filePath),
 

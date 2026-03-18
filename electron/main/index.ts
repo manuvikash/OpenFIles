@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, session, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { promises as fs, existsSync, readdirSync } from 'fs'
@@ -417,6 +417,35 @@ async function readFileBinary(
   }
 }
 
+/**
+ * Return a small JPEG thumbnail (max 240px on longest side, quality 70) for
+ * preview use. Uses Electron's built-in nativeImage — no extra dependencies.
+ * This is ~100–500× smaller than the full file so IPC stays fast.
+ */
+async function readFileThumbnail(
+  filePath: string,
+  maxDim = 240
+): Promise<{ base64: string; mimeType: string } | null> {
+  try {
+    const image = nativeImage.createFromPath(filePath)
+    if (image.isEmpty()) return null
+
+    const { width, height } = image.getSize()
+    const scale = Math.min(maxDim / width, maxDim / height, 1)
+    const resized = image.resize({
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale)),
+      quality: 'good'
+    })
+
+    const jpegBuffer = resized.toJPEG(70)
+    return { base64: jpegBuffer.toString('base64'), mimeType: 'image/jpeg' }
+  } catch (err) {
+    console.error(`[readFileThumbnail] ${filePath}:`, err)
+    return null
+  }
+}
+
 async function getDirectoryTree(dirPath: string): Promise<DirNode> {
   async function buildTree(dir: string, depth = 0): Promise<DirNode> {
     const name = path.basename(dir)
@@ -523,7 +552,8 @@ app.whenReady().then(async () => {
   // File system
   ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => scanDirectory(dirPath))
   ipcMain.handle('fs:readFileContent', async (_, filePath: string) => readFileContent(filePath))
-  ipcMain.handle('fs:readFileBinary', async (_, filePath: string) => readFileBinary(filePath))
+  ipcMain.handle('fs:readFileBinary',   async (_, filePath: string) => readFileBinary(filePath))
+  ipcMain.handle('fs:readFileThumbnail', async (_, filePath: string, maxDim?: number) => readFileThumbnail(filePath, maxDim))
   ipcMain.handle('fs:getDirectoryTree', async (_, dirPath: string) => getDirectoryTree(dirPath))
   ipcMain.handle('fs:getFileStat', async (_, filePath: string) => {
     try { const s = await fs.stat(filePath); return { size: s.size, modified: s.mtimeMs } } catch { return null }

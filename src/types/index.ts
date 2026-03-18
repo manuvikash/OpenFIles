@@ -130,6 +130,7 @@ export interface ElectronAPI {
   scanDirectory: (dirPath: string) => Promise<FileInfo[]>
   readFileContent: (filePath: string) => Promise<string>
   readFileBinary: (filePath: string) => Promise<{ base64: string; mimeType: string } | null>
+  readFileThumbnail: (filePath: string, maxDim?: number) => Promise<{ base64: string; mimeType: string } | null>
   getDirectoryTree: (dirPath: string) => Promise<DirNode>
   getFileStat: (filePath: string) => Promise<{ size: number; modified: number } | null>
 

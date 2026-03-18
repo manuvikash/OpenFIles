@@ -3,8 +3,7 @@ import {
   FileText, File, Code, Braces, Database, Terminal,
   Table, ExternalLink, FolderOpen, FolderSearch,
   Loader2, CheckCircle, AlertCircle, Play,
-  Image, Video, Music, LayoutList, LayoutGrid,
-  ChevronLeft, ChevronRight, X, ZoomIn
+  Image, Video, Music, LayoutList, LayoutGrid, ZoomIn
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
@@ -14,6 +13,9 @@ import {
 } from '@/lib/fileParser'
 import { indexFiles, collectionNameFromDir } from '@/lib/indexer'
 import { useImagePreview } from '@/hooks/useImagePreview'
+import { useInView } from '@/hooks/useInView'
+import { ImageLightbox } from '@/components/ImageLightbox'
+import type { LightboxItem } from '@/components/ImageLightbox'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -252,9 +254,13 @@ function IndexSection() {
 // ─── Image Thumbnail ──────────────────────────────────────────────────────────
 
 function ImageThumb({ filePath, className }: { filePath: string; className?: string }) {
-  const { src, loading } = useImagePreview(filePath)
+  const { ref, inView } = useInView()
+  const { src, loading } = useImagePreview(inView ? filePath : null)
   return (
-    <div className={clsx('bg-surface-900 overflow-hidden flex items-center justify-center', className)}>
+    <div
+      ref={ref}
+      className={clsx('bg-surface-900 overflow-hidden flex items-center justify-center', className)}
+    >
       {src ? (
         <img src={src} alt="" className="w-full h-full object-cover" />
       ) : loading ? (
@@ -266,112 +272,6 @@ function ImageThumb({ filePath, className }: { filePath: string; className?: str
   )
 }
 
-// ─── Lightbox ─────────────────────────────────────────────────────────────────
-
-interface LightboxProps {
-  files: FileInfo[]
-  index: number
-  onClose: () => void
-  onChange: (index: number) => void
-}
-
-function Lightbox({ files, index, onClose, onChange }: LightboxProps) {
-  const file = files[index]
-  const { src, loading } = useImagePreview(file?.path)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-      if (e.key === 'ArrowLeft') onChange((index - 1 + files.length) % files.length)
-      if (e.key === 'ArrowRight') onChange((index + 1) % files.length)
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [index, files.length, onClose, onChange])
-
-  if (!file) return null
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="relative flex flex-col bg-surface-900 rounded-2xl overflow-hidden shadow-2xl max-w-5xl w-full mx-4"
-        style={{ maxHeight: '92vh' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-surface-800 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="text-xs text-surface-500 font-mono shrink-0">
-              {index + 1} / {files.length}
-            </span>
-            <span className="text-sm font-medium text-surface-100 truncate">{file.name}</span>
-            <span className="text-xs text-surface-600 shrink-0">{formatFileSize(file.size)}</span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button
-              onClick={() => window.api.openPath(file.path)}
-              title="Open in system viewer"
-              className="flex items-center gap-1.5 text-xs text-surface-500 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              Open
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-surface-500 hover:text-surface-200 rounded-lg hover:bg-surface-800 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Image */}
-        <div className="flex-1 flex items-center justify-center bg-black/40 overflow-hidden" style={{ minHeight: 200 }}>
-          {loading && (
-            <Loader2 className="w-8 h-8 text-surface-500 animate-spin" />
-          )}
-          {src && (
-            <img
-              src={src}
-              alt={file.name}
-              className="max-w-full max-h-full object-contain"
-              style={{ maxHeight: 'calc(92vh - 120px)' }}
-            />
-          )}
-          {!loading && !src && (
-            <p className="text-surface-600 text-sm">Could not load image</p>
-          )}
-        </div>
-
-        {/* Footer nav */}
-        <div className="flex items-center justify-between px-4 py-2 border-t border-surface-800 shrink-0">
-          <p className="text-xs text-surface-600 truncate flex-1">
-            {file.path}
-          </p>
-          <div className="flex items-center gap-2 ml-4">
-            <button
-              onClick={() => onChange((index - 1 + files.length) % files.length)}
-              className="flex items-center gap-1 text-xs text-surface-400 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              Prev
-            </button>
-            <button
-              onClick={() => onChange((index + 1) % files.length)}
-              className="flex items-center gap-1 text-xs text-surface-400 hover:text-surface-200 px-2 py-1 rounded-lg hover:bg-surface-800 transition-colors"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ─── List Row ─────────────────────────────────────────────────────────────────
 
@@ -384,6 +284,12 @@ interface FileRowProps {
 }
 
 function FileRow({ file, isSelected, isIndexed, onClick, onPreview }: FileRowProps) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (isSelected) rowRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [isSelected])
+
   const handleOpen = (e: React.MouseEvent) => {
     e.stopPropagation()
     window.api.openPath(file.path)
@@ -398,6 +304,7 @@ function FileRow({ file, isSelected, isIndexed, onClick, onPreview }: FileRowPro
 
   return (
     <div
+      ref={rowRef}
       onClick={onClick}
       className={clsx(
         'group flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-surface-800/50 transition-colors',
@@ -484,7 +391,12 @@ interface GridTileProps {
 
 function GridTile({ file, isSelected, isIndexed, onClick, onPreview }: GridTileProps) {
   const isImg = isImageFile(file.ext)
-  const { src, loading } = useImagePreview(isImg ? file.path : null)
+  const { ref, inView } = useInView()
+  const { src, loading } = useImagePreview(isImg && inView ? file.path : null)
+
+  useEffect(() => {
+    if (isSelected) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [isSelected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpen = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -493,6 +405,7 @@ function GridTile({ file, isSelected, isIndexed, onClick, onPreview }: GridTileP
 
   return (
     <div
+      ref={ref}
       onClick={onClick}
       className={clsx(
         'group relative flex flex-col rounded-xl overflow-hidden cursor-pointer border transition-all',
@@ -606,6 +519,7 @@ export function FileGrid() {
 
   // Image files in sorted order — used for lightbox navigation
   const imageFiles = sorted.filter((f) => isImageFile(f.ext))
+  const lightboxItems: LightboxItem[] = imageFiles.map((f) => ({ path: f.path, name: f.name, size: f.size }))
 
   const openLightbox = (file: FileInfo) => {
     const idx = imageFiles.findIndex((f) => f.path === file.path)
@@ -673,9 +587,9 @@ export function FileGrid() {
       </div>
 
       {/* Lightbox */}
-      {lightboxIndex !== null && imageFiles.length > 0 && (
-        <Lightbox
-          files={imageFiles}
+      {lightboxIndex !== null && lightboxItems.length > 0 && (
+        <ImageLightbox
+          items={lightboxItems}
           index={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onChange={setLightboxIndex}

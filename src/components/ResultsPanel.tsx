@@ -1,16 +1,32 @@
+import { useState, useMemo } from 'react'
 import {
-  FileText, File, Code, Braces, Database, Terminal, Table,
+  FileText, File, Code, Braces, Database, Terminal, Table, Image, Video, Music,
   ExternalLink, FolderOpen, ArrowLeft, Search, AlertCircle,
-  Loader2, FileSearch
+  Loader2, FileSearch, ZoomIn
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '@/store/appStore'
 import type { SearchResult } from '@/types'
-import { getFileIconInfo, formatFileSize } from '@/lib/fileParser'
+import { getFileIconInfo } from '@/lib/fileParser'
+import { useImagePreview } from '@/hooks/useImagePreview'
+import { useInView } from '@/hooks/useInView'
+import { ImageLightbox } from '@/components/ImageLightbox'
+import type { LightboxItem } from '@/components/ImageLightbox'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png'])
+
+function isImageResult(result: SearchResult): boolean {
+  return IMAGE_EXTENSIONS.has(result.ext.toLowerCase())
+}
+
+// ─── Icon Map ─────────────────────────────────────────────────────────────────
 
 const ICON_MAP: Record<string, React.ElementType> = {
   'file-text': FileText, 'code': Code, 'braces': Braces,
-  'database': Database, 'terminal': Terminal, 'table': Table, 'file': File
+  'database': Database, 'terminal': Terminal, 'table': Table, 'file': File,
+  'image': Image, 'video': Video, 'music': Music
 }
 
 function FileIcon({ ext }: { ext: string }) {
@@ -18,6 +34,8 @@ function FileIcon({ ext }: { ext: string }) {
   const Icon = ICON_MAP[icon] ?? File
   return <Icon className={clsx('w-5 h-5 shrink-0', color)} />
 }
+
+// ─── Score badge ──────────────────────────────────────────────────────────────
 
 function ScoreBadge({ score }: { score: number }) {
   const pct = Math.round(score * 100)
@@ -33,14 +51,55 @@ function ScoreBadge({ score }: { score: number }) {
   )
 }
 
+// ─── Image thumbnail with lazy load ──────────────────────────────────────────
+
+function ResultImageThumb({
+  filePath,
+  fileName,
+  onPreview
+}: {
+  filePath: string
+  fileName: string
+  onPreview: () => void
+}) {
+  const { ref, inView } = useInView()
+  // 800px gives good sharpness for the wide 16:9 card preview without loading the full file
+  const { src, loading } = useImagePreview(inView ? filePath : null, { maxDim: 800 })
+
+  return (
+    <div
+      ref={ref}
+      onClick={(e) => { e.stopPropagation(); onPreview() }}
+      className="group/thumb relative w-full aspect-video rounded-lg overflow-hidden bg-surface-900 cursor-zoom-in mt-2"
+    >
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="w-5 h-5 text-surface-600 animate-spin" />
+        </div>
+      )}
+      {src && (
+        <img src={src} alt={fileName} className="w-full h-full object-cover" />
+      )}
+      {/* Zoom overlay */}
+      <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover/thumb:bg-black/30 transition-colors">
+        <ZoomIn className="w-6 h-6 text-white opacity-0 group-hover/thumb:opacity-100 drop-shadow-lg transition-opacity" />
+      </div>
+    </div>
+  )
+}
+
+// ─── Result Card ──────────────────────────────────────────────────────────────
+
 interface ResultCardProps {
   result: SearchResult
   rank: number
+  onPreview?: () => void
 }
 
-function ResultCard({ result, rank }: ResultCardProps) {
+function ResultCard({ result, rank, onPreview }: ResultCardProps) {
   const handleOpen = () => window.api.openPath(result.filePath)
   const handleReveal = () => window.api.showItemInFolder(result.filePath)
+  const isImg = isImageResult(result)
 
   const dir = result.filePath
     .replace(result.fileName, '')
@@ -50,7 +109,8 @@ function ResultCard({ result, rank }: ResultCardProps) {
     .join('/')
 
   return (
-    <div className="group bg-surface-800 hover:bg-surface-750 border border-surface-700 hover:border-surface-600 rounded-xl p-4 transition-all cursor-pointer"
+    <div
+      className="group bg-surface-800 hover:bg-surface-750 border border-surface-700 hover:border-surface-600 rounded-xl p-4 transition-all cursor-pointer"
       onClick={handleOpen}
     >
       <div className="flex items-start gap-3">
@@ -69,8 +129,17 @@ function ResultCard({ result, rank }: ResultCardProps) {
             <ScoreBadge score={result.score} />
           </div>
 
-          {/* Snippet */}
-          {result.snippet && (
+          {/* Image preview */}
+          {isImg && onPreview && (
+            <ResultImageThumb
+              filePath={result.filePath}
+              fileName={result.fileName}
+              onPreview={onPreview}
+            />
+          )}
+
+          {/* Text snippet — skip for images (snippet is just "[image] filename") */}
+          {!isImg && result.snippet && (
             <p className="text-xs text-surface-400 leading-relaxed line-clamp-3 bg-surface-900/50 rounded-lg px-3 py-2 mt-2 font-mono border border-surface-700/50">
               {result.snippet}
             </p>
@@ -94,9 +163,20 @@ function ResultCard({ result, rank }: ResultCardProps) {
           <FolderOpen className="w-3.5 h-3.5" />
           Reveal
         </button>
-        <span className="text-surface-700 ml-auto text-xs">
-          Chunk #{result.chunkIndex}
-        </span>
+        {isImg && onPreview && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onPreview() }}
+            className="flex items-center gap-1.5 text-xs text-surface-400 hover:text-surface-200 transition-colors"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+            Preview
+          </button>
+        )}
+        {!isImg && (
+          <span className="text-surface-700 ml-auto text-xs">
+            Chunk #{result.chunkIndex}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -106,8 +186,24 @@ function ResultCard({ result, rank }: ResultCardProps) {
 
 export function ResultsPanel() {
   const { search, setActivePanel, clearSearch } = useAppStore()
-
   const { results, isSearching, hasSearched, error, query, mode } = search
+
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+
+  // Build a deduplicated list of image results for lightbox navigation
+  const imageResults = useMemo(
+    () => results.filter(isImageResult),
+    [results]
+  )
+  const lightboxItems: LightboxItem[] = useMemo(
+    () => imageResults.map((r) => ({ path: r.filePath, name: r.fileName })),
+    [imageResults]
+  )
+
+  const openLightbox = (result: SearchResult) => {
+    const idx = imageResults.findIndex((r) => r.filePath === result.filePath)
+    if (idx !== -1) setLightboxIndex(idx)
+  }
 
   const handleBack = () => {
     clearSearch()
@@ -179,11 +275,26 @@ export function ResultsPanel() {
         {!isSearching && !error && results.length > 0 && (
           <div className="flex flex-col gap-3">
             {results.map((result, i) => (
-              <ResultCard key={`${result.filePath}-${result.chunkIndex}`} result={result} rank={i + 1} />
+              <ResultCard
+                key={`${result.filePath}-${result.chunkIndex}`}
+                result={result}
+                rank={i + 1}
+                onPreview={isImageResult(result) ? () => openLightbox(result) : undefined}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {/* Lightbox */}
+      {lightboxIndex !== null && lightboxItems.length > 0 && (
+        <ImageLightbox
+          items={lightboxItems}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onChange={setLightboxIndex}
+        />
+      )}
     </div>
   )
 }
